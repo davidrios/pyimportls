@@ -1,0 +1,4 @@
+.neovim
+.zig-cache
+.venv
+zig-out
