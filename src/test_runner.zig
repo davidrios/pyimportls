@@ -66,6 +66,10 @@ pub fn main() !void {
         };
 
         current_test = friendly_name;
+
+        if (env.verbose) {
+            printer.status(status, "{s} (starting)\n", .{friendly_name});
+        }
         std.testing.allocator_instance = .{};
         const result = t.func();
         current_test = null;
@@ -99,7 +103,7 @@ pub fn main() !void {
 
         if (env.verbose) {
             const ms = @as(f64, @floatFromInt(ns_taken)) / 1_000_000.0;
-            printer.status(status, "{s} ({d:.2}ms)\n", .{ friendly_name, ms });
+            printer.status(status, "{s} (took {d:.2}ms)\n", .{ friendly_name, ms });
         } else {
             printer.status(status, ".", .{});
         }
