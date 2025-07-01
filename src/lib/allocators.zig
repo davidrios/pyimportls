@@ -4,35 +4,34 @@ const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const test_utils = @import("test_utils.zig");
 
-const IncreaseNeverFreeAllocator = struct {
+pub const IncreaseNeverFreeAllocator = struct {
     const Self = @This();
     const slots = 20;
 
-    start_buffer: []u8,
     current_index: usize,
     max_size: usize,
     current_size: usize,
 
     allocators: [slots]FixedBufferAllocator,
 
-    pub fn init(start_buffer: []u8, max_size: usize) Self {
+    pub fn init(initial_size: usize, max_size: usize) !Self {
         // SAFETY: it's safe, trust me bro
         var allocators: [slots]FixedBufferAllocator = .{undefined} ** slots;
 
-        const first_buf_allocator = FixedBufferAllocator.init(start_buffer);
-        allocators[0] = first_buf_allocator;
+        const new_buf = try std.heap.page_allocator.alloc(u8, initial_size);
+        const buf_alloc = FixedBufferAllocator.init(new_buf);
+        allocators[0] = buf_alloc;
 
         return Self{
-            .start_buffer = start_buffer,
             .current_index = 0,
             .max_size = max_size,
             .allocators = allocators,
-            .current_size = start_buffer.len,
+            .current_size = initial_size,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        for (1..self.current_index + 1) |i| {
+        for (0..self.current_index + 1) |i| {
             std.heap.page_allocator.free(self.allocators[i].buffer);
         }
     }
@@ -53,7 +52,6 @@ const IncreaseNeverFreeAllocator = struct {
         const self: *Self = @ptrCast(@alignCast(ctx));
 
         if (FixedBufferAllocator.alloc(@ptrCast(&self.allocators[self.current_index]), n, alignment, ra)) |buf| {
-            std.log.debug("success allocating {d} bytes", .{n});
             return buf;
         } else {
             std.log.debug("failed to allocate {d} bytes", .{n});
@@ -79,29 +77,46 @@ const IncreaseNeverFreeAllocator = struct {
     }
 };
 
-const HAYSTACK = "abcdefghijklmnopqrstvuwxyz0123456789";
-fn indexOfScalar(_: Allocator, _: *std.time.Timer) !void {
-    const i = std.mem.indexOfScalar(u8, HAYSTACK, '9').?;
-    if (i != 35) {
-        @panic("fail");
+fn runAllocatorBenchmark(allocator: Allocator) !void {
+    for (0..100000) |_| {
+        const aa = try allocator.create(u8);
+        defer allocator.destroy(aa);
+
+        const item = try allocator.alloc([10]u8, 100);
+        defer allocator.free(item);
     }
 }
 
-test "benchmark: asdfasdf" {
+fn benchmarkDefaultAllocator(default_allocator: Allocator, _: *std.time.Timer) !void {
+    try runAllocatorBenchmark(default_allocator);
+}
+
+fn benchmarkArenaDefaultAllocator(default_allocator: Allocator, _: *std.time.Timer) !void {
+    var arena = std.heap.ArenaAllocator.init(default_allocator);
+    defer arena.deinit();
+    try runAllocatorBenchmark(arena.allocator());
+}
+
+fn benchmarkIncreaseNeverFreeAllocator(_: Allocator, _: *std.time.Timer) !void {
+    var infa = try IncreaseNeverFreeAllocator.init(1024 * 8, 1024 * 1024 * 100);
+    defer infa.deinit();
+    try runAllocatorBenchmark(infa.allocator());
+}
+
+test "benchmark allocators" {
     try test_utils.is_benchmark();
 
     const zul = @import("zul");
 
-    std.log.debug("aaaa", .{});
-
-    (try zul.benchmark.run(indexOfScalar, .{})).print("indexOfScalar");
+    (try zul.benchmark.run(benchmarkIncreaseNeverFreeAllocator, test_utils.default_benchmark_options)).print("benchmark IncreaseNeverFreeAllocator");
+    (try zul.benchmark.run(benchmarkDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark default allocator");
+    (try zul.benchmark.run(benchmarkArenaDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark arena default allocator");
 }
 
 test "test allocators" {
     try test_utils.is_regular();
 
-    var buf: [10]u8 = undefined;
-    var never_free = IncreaseNeverFreeAllocator.init(&buf, 2000);
+    var never_free = try IncreaseNeverFreeAllocator.init(10, 2000);
     defer never_free.deinit();
 
     const allocator = never_free.allocator();
@@ -116,5 +131,5 @@ test "test allocators" {
     _ = try allocator.create([60]u8);
     std.debug.print("60\n", .{});
     _ = try allocator.create([1100]u8);
-    std.debug.print("60\n", .{});
+    std.debug.print("1100\n", .{});
 }

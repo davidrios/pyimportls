@@ -12,10 +12,12 @@ pub fn build(b: *std.Build) void {
     // Test options
     const test_is_benchmark = b.option(bool, "test_is_benchmark", "Run tests with benchmarks") orelse false;
     const test_only_benchmarks = b.option(bool, "test_only_benchmarks", "Run only benchmarks") orelse false;
+    const test_benchmark_secs = b.option(usize, "test_benchmark_secs", "Run each benchmark for this duration") orelse 5;
 
     const test_options = b.addOptions();
     test_options.addOption(bool, "is_benchmark", test_is_benchmark);
     test_options.addOption(bool, "only_benchmarks", test_only_benchmarks);
+    test_options.addOption(usize, "benchmark_secs", test_benchmark_secs);
 
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
