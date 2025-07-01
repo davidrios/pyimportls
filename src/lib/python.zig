@@ -1,6 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
 
+const test_options = @import("test_options");
+
 /// # Caller's Responsibility
 /// The caller OWNS the memory of the returned ArrayList AND each of the strings inside it.
 /// You must deinitialize the list and free each string element to prevent memory leaks.
@@ -55,6 +57,10 @@ pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !std.
 }
 
 test "return paths from testing venv" {
+    if (test_options.only_benchmarks) {
+        return error.SkipZigTest;
+    }
+
     const allocator = testing.allocator;
     const paths = try getPythonPaths(allocator, "python");
     defer {
@@ -111,7 +117,7 @@ pub const PythonFileIterator = struct {
         for (self.paths_to_search.items[self.current_path_index..]) |base_path| {
             if (self.walker == null) {
                 const dir = std.fs.cwd().openDir(base_path, .{ .iterate = true }) catch |err| {
-                    std.log.warn("Could not open path '{s}': {s}. Skipping.", .{ base_path, @errorName(err) });
+                    std.log.info("Could not open path '{s}': {s}. Skipping.", .{ base_path, @errorName(err) });
                     self.deinit();
                     self.current_path_index += 1;
                     continue;
@@ -139,6 +145,10 @@ pub const PythonFileIterator = struct {
 };
 
 test "PythonFileIterator finds all .py files across multiple directories" {
+    if (test_options.only_benchmarks) {
+        return error.SkipZigTest;
+    }
+
     const allocator = testing.allocator;
 
     var tmp = testing.tmpDir(.{});

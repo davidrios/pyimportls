@@ -123,12 +123,21 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    const test_is_benchmark = b.option(bool, "test_is_benchmark", "Run tests with benchmarks") orelse false;
+    const test_only_benchmarks = b.option(bool, "test_only_benchmarks", "Run only benchmarks") orelse false;
+
+    const test_options = b.addOptions();
+    test_options.addOption(bool, "is_benchmark", test_is_benchmark);
+    test_options.addOption(bool, "only_benchmarks", test_only_benchmarks);
+    lib_mod.addOptions("test_options", test_options);
+
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
         .root_module = lib_mod,
         .test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple },
     });
+    lib_unit_tests.root_module.addOptions("config", test_options);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
