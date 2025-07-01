@@ -1,8 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 
-const test_options = @import("test_options");
 const ts = @import("tree-sitter");
+
+const test_utils = @import("test_utils.zig");
 
 extern fn tree_sitter_python() callconv(.C) *const ts.Language;
 
@@ -41,9 +42,7 @@ pub fn parse(buffer: []const u8) !Parsed {
 }
 
 test "test ABI version" {
-    if (test_options.only_benchmarks) {
-        return error.SkipZigTest;
-    }
+    try test_utils.is_regular();
 
     const language = tree_sitter_python();
     defer language.destroy();

@@ -9,10 +9,18 @@ pub fn build(b: *std.Build) void {
     // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
 
+    // Test options
+    const test_is_benchmark = b.option(bool, "test_is_benchmark", "Run tests with benchmarks") orelse false;
+    const test_only_benchmarks = b.option(bool, "test_only_benchmarks", "Run only benchmarks") orelse false;
+
+    const test_options = b.addOptions();
+    test_options.addOption(bool, "is_benchmark", test_is_benchmark);
+    test_options.addOption(bool, "only_benchmarks", test_only_benchmarks);
+
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
-    const optimize = b.standardOptimizeOption(.{});
+    const optimize = if (test_is_benchmark or test_only_benchmarks) .ReleaseFast else b.standardOptimizeOption(.{});
 
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
@@ -123,12 +131,6 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const test_is_benchmark = b.option(bool, "test_is_benchmark", "Run tests with benchmarks") orelse false;
-    const test_only_benchmarks = b.option(bool, "test_only_benchmarks", "Run only benchmarks") orelse false;
-
-    const test_options = b.addOptions();
-    test_options.addOption(bool, "is_benchmark", test_is_benchmark);
-    test_options.addOption(bool, "only_benchmarks", test_only_benchmarks);
     lib_mod.addOptions("test_options", test_options);
 
     // Creates a step for unit testing. This only builds the test executable

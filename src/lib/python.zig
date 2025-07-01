@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const test_options = @import("test_options");
+const test_utils = @import("test_utils.zig");
 
 /// # Caller's Responsibility
 /// The caller OWNS the memory of the returned ArrayList AND each of the strings inside it.
@@ -57,9 +57,7 @@ pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !std.
 }
 
 test "return paths from testing venv" {
-    if (test_options.only_benchmarks) {
-        return error.SkipZigTest;
-    }
+    try test_utils.is_regular();
 
     const allocator = testing.allocator;
     const paths = try getPythonPaths(allocator, "python");
@@ -145,9 +143,7 @@ pub const PythonFileIterator = struct {
 };
 
 test "PythonFileIterator finds all .py files across multiple directories" {
-    if (test_options.only_benchmarks) {
-        return error.SkipZigTest;
-    }
+    try test_utils.is_regular();
 
     const allocator = testing.allocator;
 

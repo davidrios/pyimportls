@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
-const test_options = @import("test_options");
+const test_utils = @import("test_utils.zig");
 
 const IncreaseNeverFreeAllocator = struct {
     const Self = @This();
@@ -79,16 +79,26 @@ const IncreaseNeverFreeAllocator = struct {
     }
 };
 
-test "benchmark: asdfasdf" {
-    if (!test_options.is_benchmark and !test_options.only_benchmarks) {
-        return error.SkipZigTest;
+const HAYSTACK = "abcdefghijklmnopqrstvuwxyz0123456789";
+fn indexOfScalar(_: Allocator, _: *std.time.Timer) !void {
+    const i = std.mem.indexOfScalar(u8, HAYSTACK, '9').?;
+    if (i != 35) {
+        @panic("fail");
     }
 }
 
+test "benchmark: asdfasdf" {
+    try test_utils.is_benchmark();
+
+    const zul = @import("zul");
+
+    std.log.debug("aaaa", .{});
+
+    (try zul.benchmark.run(indexOfScalar, .{})).print("indexOfScalar");
+}
+
 test "test allocators" {
-    if (test_options.only_benchmarks) {
-        return error.SkipZigTest;
-    }
+    try test_utils.is_regular();
 
     var buf: [10]u8 = undefined;
     var never_free = IncreaseNeverFreeAllocator.init(&buf, 2000);
