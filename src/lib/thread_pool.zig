@@ -24,6 +24,9 @@ const std = @import("std");
 const assert = std.debug.assert;
 const Atomic = std.atomic.Value;
 
+const zul = @import("zul");
+
+const allocators = @import("allocators.zig");
 const test_utils = @import("test_utils.zig");
 
 const ThreadPool = @This();
@@ -813,47 +816,52 @@ const Node = struct {
     };
 };
 
-const TestTask = struct {
-    const Self = @This();
+const testTaskWait = 50;
+const testIterations = 1000;
 
-    counter: *std.atomic.Value(usize),
-    task_id: usize,
-    task: ?ThreadPool.Task,
+fn runThreadpoolTest(testNumThreads: u32) !void {
+    const TestTask = struct {
+        const Self = @This();
 
-    fn init(counter: *std.atomic.Value(usize), task_id: usize) Self {
-        return .{ .counter = counter, .task_id = task_id, .task = null };
-    }
+        counter: *std.atomic.Value(usize),
+        task_id: usize,
+        task: ?ThreadPool.Task,
 
-    fn getTask(self: *Self) *ThreadPool.Task {
-        if (self.task == null) {
-            self.task = .{ .ptr = self, .callback = onSchedule };
+        fn init(counter: *std.atomic.Value(usize), task_id: usize) Self {
+            return .{ .counter = counter, .task_id = task_id, .task = null };
         }
-        return &self.task.?;
-    }
 
-    fn onSchedule(ctx: *anyopaque) void {
-        const self: *Self = @ptrCast(@alignCast(ctx));
-        std.time.sleep(std.time.ns_per_ms);
-        // std.debug.print("task done: {}\n", .{self.task_id});
-        _ = self.counter.fetchAdd(1, .acquire);
-    }
+        fn getTask(self: *Self) *ThreadPool.Task {
+            if (self.task == null) {
+                self.task = .{ .ptr = self, .callback = onSchedule };
+            }
+            return &self.task.?;
+        }
 
-    fn getBatch(self: *Self) ThreadPool.Batch {
-        return ThreadPool.Batch.from(self.getTask());
-    }
-};
+        fn onSchedule(ctx: *anyopaque) void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            std.time.sleep(testTaskWait);
+            // std.debug.print("task done: {}\n", .{self.task_id});
+            _ = self.counter.fetchAdd(1, .acquire);
+        }
 
-test "test thread pool" {
-    try test_utils.is_regular();
+        fn getBatch(self: *Self) ThreadPool.Batch {
+            return ThreadPool.Batch.from(self.getTask());
+        }
+    };
 
-    var tp = ThreadPool.init(.{ .stack_size = 100, .max_threads = 64 });
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(8192, 1024 * 1024);
+    defer infa.deinit();
+    const alloc = infa.allocator();
+
+    var tp = ThreadPool.init(.{ .stack_size = 1000, .max_threads = testNumThreads });
     defer tp.deinit();
 
     var counter = std.atomic.Value(usize).init(0);
 
     var total_tasks: usize = 0;
-    for (0..1000) |i| {
-        var ptr = try std.heap.page_allocator.create(TestTask);
+    for (0..testIterations) |i| {
+        var ptr = try alloc.create(TestTask);
         ptr.* = TestTask.init(&counter, i);
         tp.schedule(ptr.getBatch());
         total_tasks += 1;
@@ -861,4 +869,55 @@ test "test thread pool" {
 
     while (counter.load(.acquire) < total_tasks) {}
     tp.shutdown();
+}
+
+test "test thread pool" {
+    try test_utils.is_regular();
+    try runThreadpoolTest(32);
+}
+
+fn benchmarkThreadpoolLow(_: std.mem.Allocator, _: *std.time.Timer) !void {
+    try runThreadpoolTest(16);
+}
+
+fn benchmarkThreadpoolHigh(_: std.mem.Allocator, _: *std.time.Timer) !void {
+    try runThreadpoolTest(256);
+}
+
+fn someTestTask(counter: *std.atomic.Value(usize), task_id: usize) void {
+    _ = task_id;
+    std.time.sleep(testTaskWait);
+    _ = counter.fetchAdd(1, .acquire);
+}
+
+fn runZulThreadpool(testNumThreads: u32) !void {
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(8192, 1024 * 1024);
+    defer infa.deinit();
+    const alloc = infa.allocator();
+
+    var tp = try zul.ThreadPool(someTestTask).init(alloc, .{ .count = testNumThreads, .backlog = testIterations * 2 });
+    defer tp.deinit(alloc);
+
+    var counter = std.atomic.Value(usize).init(0);
+
+    var total_tasks: usize = 0;
+    for (0..testIterations) |i| {
+        try tp.spawn(.{ &counter, i });
+        total_tasks += 1;
+    }
+}
+
+fn benchmarkZulThreadpoolLow(_: std.mem.Allocator, _: *std.time.Timer) !void {
+    try runZulThreadpool(16);
+}
+fn benchmarkZulThreadpoolHigh(_: std.mem.Allocator, _: *std.time.Timer) !void {
+    try runZulThreadpool(256);
+}
+
+test "benchmark threadpools" {
+    try test_utils.is_benchmark();
+    (try zul.benchmark.run(benchmarkZulThreadpoolLow, test_utils.default_benchmark_options)).print("benchmark Zul Threadpool low contention");
+    (try zul.benchmark.run(benchmarkZulThreadpoolHigh, test_utils.default_benchmark_options)).print("benchmark Zul Threadpool high contention");
+    (try zul.benchmark.run(benchmarkThreadpoolLow, test_utils.default_benchmark_options)).print("benchmark Threadpool low contention");
+    (try zul.benchmark.run(benchmarkThreadpoolHigh, test_utils.default_benchmark_options)).print("benchmark Threadpool high contention");
 }
