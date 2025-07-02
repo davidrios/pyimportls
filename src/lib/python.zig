@@ -69,7 +69,7 @@ test "return paths from testing venv" {
     }
 
     for (paths.items) |value| {
-        std.debug.print("path: {s}\n", .{value});
+        std.log.debug("path: {s}", .{value});
     }
 }
 
@@ -188,7 +188,7 @@ test "PythonFileIterator finds all .py files across multiple directories" {
     var nbuf: [4096:0]u8 = undefined;
     while (try iterator.next(&nbuf)) |res| {
         const val = try std.mem.concat(allocator, u8, &.{ res.base_path.*, std.fs.path.sep_str, nbuf[0..res.size] });
-        std.debug.print("res: {s}\n", .{val});
+        std.log.debug("res: {s}", .{val});
         try found_files.append(val);
     }
 
