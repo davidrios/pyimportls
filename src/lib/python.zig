@@ -41,7 +41,7 @@ pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !Pyth
     var it = std.mem.tokenizeScalar(u8, result.stdout, '\n');
 
     while (it.next()) |line| {
-        if (std.mem.endsWith(u8, line, ".zip") or std.mem.endsWith(u8, line, "lib-dynload")) {
+        if (std.mem.eql(u8, line, "") or std.mem.endsWith(u8, line, ".zip") or std.mem.endsWith(u8, line, "lib-dynload")) {
             continue;
         }
 
@@ -186,7 +186,7 @@ fn createTestPaths(allocator: std.mem.Allocator) !struct {
 }
 
 fn benchmarkPythonFileIterator(_: std.mem.Allocator, _: *std.time.Timer) !void {
-    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 1024 * 16, 1024 * 1024 * 50);
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 16 * allocators.kb_to_bytes, 50 * allocators.mb_to_bytes);
     defer infa.deinit();
     const infa_alloc = infa.allocator();
 

@@ -4,6 +4,10 @@ const FixedBufferAllocator = std.heap.FixedBufferAllocator;
 
 const test_utils = @import("test_utils.zig");
 
+pub const kb_to_bytes = 1024;
+pub const mb_to_bytes = kb_to_bytes * 1024;
+pub const gb_to_bytes = mb_to_bytes * 1024;
+
 pub const IncreaseNeverFreeAllocator = struct {
     const Self = @This();
     const slots = 20;
@@ -110,7 +114,7 @@ fn benchmarkArenaCAllocator(_: Allocator, _: *std.time.Timer) !void {
 }
 
 fn benchmarkIncreaseNeverFreeAllocator(_: Allocator, _: *std.time.Timer) !void {
-    var infa = try IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 1024 * 8, 1024 * 1024 * 100);
+    var infa = try IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8 * kb_to_bytes, 100 * mb_to_bytes);
     defer infa.deinit();
     try runAllocatorBenchmark(infa.allocator());
 }

@@ -850,7 +850,7 @@ fn runThreadpoolTest(testNumThreads: u32) !void {
         }
     };
 
-    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8192, 1024 * 1024);
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8 * allocators.kb_to_bytes, allocators.mb_to_bytes);
     defer infa.deinit();
     const alloc = infa.allocator();
 
@@ -891,7 +891,7 @@ fn someTestTask(counter: *std.atomic.Value(usize), task_id: usize) void {
 }
 
 fn runZulThreadpool(testNumThreads: u32) !void {
-    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8192, 1024 * 1024);
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8 * allocators.kb_to_bytes, allocators.mb_to_bytes);
     defer infa.deinit();
     const alloc = infa.allocator();
 
