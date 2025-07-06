@@ -8,21 +8,23 @@ pub const IncreaseNeverFreeAllocator = struct {
     const Self = @This();
     const slots = 20;
 
+    base_allocator: Allocator,
     current_index: usize,
     max_size: usize,
     current_size: usize,
 
     allocators: [slots]FixedBufferAllocator,
 
-    pub fn init(initial_size: usize, max_size: usize) !Self {
+    pub fn init(base_allocator: Allocator, initial_size: usize, max_size: usize) !Self {
         // SAFETY: it's safe, trust me bro
         var allocators: [slots]FixedBufferAllocator = .{undefined} ** slots;
 
-        const new_buf = try std.heap.page_allocator.alloc(u8, initial_size);
+        const new_buf = try base_allocator.alloc(u8, initial_size);
         const buf_alloc = FixedBufferAllocator.init(new_buf);
         allocators[0] = buf_alloc;
 
         return Self{
+            .base_allocator = base_allocator,
             .current_index = 0,
             .max_size = max_size,
             .allocators = allocators,
@@ -32,7 +34,7 @@ pub const IncreaseNeverFreeAllocator = struct {
 
     pub fn deinit(self: *Self) void {
         for (0..self.current_index + 1) |i| {
-            std.heap.page_allocator.free(self.allocators[i].buffer);
+            self.base_allocator.free(self.allocators[i].buffer);
         }
     }
 
@@ -69,7 +71,7 @@ pub const IncreaseNeverFreeAllocator = struct {
             self.current_size += next_size;
             std.log.debug("increased size by {d} to {d}", .{ next_size, self.current_size });
 
-            const new_buf = std.heap.page_allocator.alloc(u8, next_size) catch return null;
+            const new_buf = self.base_allocator.alloc(u8, next_size) catch return null;
             self.allocators[self.current_index] = FixedBufferAllocator.init(new_buf);
 
             return Self.alloc(self, n, alignment, ra);
@@ -97,26 +99,38 @@ fn benchmarkArenaDefaultAllocator(default_allocator: Allocator, _: *std.time.Tim
     try runAllocatorBenchmark(arena.allocator());
 }
 
+fn benchmarkCAllocator(_: Allocator, _: *std.time.Timer) !void {
+    try runAllocatorBenchmark(std.heap.c_allocator);
+}
+
+fn benchmarkArenaCAllocator(_: Allocator, _: *std.time.Timer) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    try runAllocatorBenchmark(arena.allocator());
+}
+
 fn benchmarkIncreaseNeverFreeAllocator(_: Allocator, _: *std.time.Timer) !void {
-    var infa = try IncreaseNeverFreeAllocator.init(1024 * 8, 1024 * 1024 * 100);
+    var infa = try IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 1024 * 8, 1024 * 1024 * 100);
     defer infa.deinit();
     try runAllocatorBenchmark(infa.allocator());
 }
 
 test "benchmark allocators" {
-    try test_utils.is_benchmark();
+    try test_utils.is_benchmark("benchmark allocators");
 
     const zul = @import("zul");
 
     (try zul.benchmark.run(benchmarkIncreaseNeverFreeAllocator, test_utils.default_benchmark_options)).print("benchmark IncreaseNeverFreeAllocator");
     (try zul.benchmark.run(benchmarkDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark default allocator");
     (try zul.benchmark.run(benchmarkArenaDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark arena default allocator");
+    (try zul.benchmark.run(benchmarkCAllocator, test_utils.default_benchmark_options)).print("benchmark C allocator");
+    (try zul.benchmark.run(benchmarkArenaCAllocator, test_utils.default_benchmark_options)).print("benchmark arena C allocator");
 }
 
 test "test allocators" {
     try test_utils.is_regular();
 
-    var never_free = try IncreaseNeverFreeAllocator.init(10, 2000);
+    var never_free = try IncreaseNeverFreeAllocator.init(std.testing.allocator, 10, 2000);
     defer never_free.deinit();
 
     const allocator = never_free.allocator();

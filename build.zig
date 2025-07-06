@@ -3,6 +3,8 @@ const std = @import("std");
 // declaratively construct a build graph that will be executed by an external
 // runner.
 pub fn build(b: *std.Build) void {
+    b.reference_trace = 50;
+
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -12,17 +14,19 @@ pub fn build(b: *std.Build) void {
     // Test options
     const test_is_benchmark = b.option(bool, "test_is_benchmark", "Run tests with benchmarks") orelse false;
     const test_only_benchmarks = b.option(bool, "test_only_benchmarks", "Run only benchmarks") orelse false;
-    const test_benchmark_secs = b.option(usize, "test_benchmark_secs", "Run each benchmark for this duration") orelse 5;
+    const test_benchmark_secs = b.option(usize, "test_benchmark_secs", "Run each benchmark for this duration") orelse 3;
+    const test_single_benchmark = b.option([]const u8, "test_single_benchmark", "Run only the named benchmark") orelse "";
 
     const test_options = b.addOptions();
     test_options.addOption(bool, "is_benchmark", test_is_benchmark);
     test_options.addOption(bool, "only_benchmarks", test_only_benchmarks);
     test_options.addOption(usize, "benchmark_secs", test_benchmark_secs);
+    test_options.addOption([]const u8, "single_benchmark", test_single_benchmark);
 
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
-    const optimize = if (test_is_benchmark or test_only_benchmarks) .ReleaseFast else b.standardOptimizeOption(.{});
+    const optimize = if (test_is_benchmark or test_only_benchmarks or !std.mem.eql(u8, test_single_benchmark, "")) .ReleaseFast else b.standardOptimizeOption(.{});
 
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.

@@ -850,7 +850,7 @@ fn runThreadpoolTest(testNumThreads: u32) !void {
         }
     };
 
-    var infa = try allocators.IncreaseNeverFreeAllocator.init(8192, 1024 * 1024);
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8192, 1024 * 1024);
     defer infa.deinit();
     const alloc = infa.allocator();
 
@@ -891,7 +891,7 @@ fn someTestTask(counter: *std.atomic.Value(usize), task_id: usize) void {
 }
 
 fn runZulThreadpool(testNumThreads: u32) !void {
-    var infa = try allocators.IncreaseNeverFreeAllocator.init(8192, 1024 * 1024);
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8192, 1024 * 1024);
     defer infa.deinit();
     const alloc = infa.allocator();
 
@@ -915,7 +915,7 @@ fn benchmarkZulThreadpoolHigh(_: std.mem.Allocator, _: *std.time.Timer) !void {
 }
 
 test "benchmark threadpools" {
-    try test_utils.is_benchmark();
+    try test_utils.is_benchmark("benchmark threadpools");
     (try zul.benchmark.run(benchmarkZulThreadpoolLow, test_utils.default_benchmark_options)).print("benchmark Zul Threadpool low contention");
     (try zul.benchmark.run(benchmarkZulThreadpoolHigh, test_utils.default_benchmark_options)).print("benchmark Zul Threadpool high contention");
     (try zul.benchmark.run(benchmarkThreadpoolLow, test_utils.default_benchmark_options)).print("benchmark Threadpool low contention");

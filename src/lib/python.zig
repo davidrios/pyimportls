@@ -1,23 +1,22 @@
 const std = @import("std");
 const testing = std.testing;
 
+const allocators = @import("allocators.zig");
 const test_utils = @import("test_utils.zig");
 
-/// # Caller's Responsibility
-/// The caller OWNS the memory of the returned ArrayList AND each of the strings inside it.
-/// You must deinitialize the list and free each string element to prevent memory leaks.
-///
-/// Example Cleanup:
-/// ```zig
-/// var list = try getPythonPaths(allocator, ...);
-/// defer {
-///     for (list.items) |item| {
-///         allocator.free(item);
-///     }
-///     list.deinit();
-/// }
-/// ```
-pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !std.ArrayList([]const u8) {
+const PythonPaths = struct {
+    paths: std.ArrayListUnmanaged([]const u8),
+
+    pub fn deinit(self: *PythonPaths, allocator: std.mem.Allocator) void {
+        for (self.paths.items) |item| {
+            allocator.free(item);
+        }
+        self.paths.deinit(allocator);
+    }
+};
+
+/// Don't forget to call `.deinit` with the same allocator
+pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !PythonPaths {
     const argv = &[_][]const u8{ pythonBin, "-c", "import sys; print('\\n'.join(sys.path))" };
 
     const result = try std.process.Child.run(.{
@@ -37,8 +36,7 @@ pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !std.
         return error.CommandFailed;
     }
 
-    var lines = std.ArrayList([]const u8).init(allocator);
-    errdefer lines.deinit();
+    var lines = std.ArrayListUnmanaged([]const u8){};
 
     var it = std.mem.tokenizeScalar(u8, result.stdout, '\n');
 
@@ -50,25 +48,20 @@ pub fn getPythonPaths(allocator: std.mem.Allocator, pythonBin: []const u8) !std.
         const owned_line = try allocator.dupe(u8, line);
         errdefer allocator.free(owned_line);
 
-        try lines.append(owned_line);
+        try lines.append(allocator, owned_line);
     }
 
-    return lines;
+    return PythonPaths{ .paths = lines };
 }
 
 test "return paths from testing venv" {
     try test_utils.is_regular();
 
     const allocator = testing.allocator;
-    const paths = try getPythonPaths(allocator, "python");
-    defer {
-        for (paths.items) |item| {
-            allocator.free(item);
-        }
-        paths.deinit();
-    }
+    var python_paths = try getPythonPaths(allocator, "python");
+    defer python_paths.deinit(allocator);
 
-    for (paths.items) |value| {
+    for (python_paths.paths.items) |value| {
         std.log.debug("path: {s}", .{value});
     }
 }
@@ -78,16 +71,14 @@ test "return paths from testing venv" {
 pub const PythonFileIterator = struct {
     const Self = @This();
 
-    allocator: std.mem.Allocator,
-    paths_to_search: std.ArrayList([]const u8),
+    paths_to_search: std.ArrayListUnmanaged([]const u8),
     current_path_index: usize,
 
     current_dir: ?std.fs.Dir,
     walker: ?std.fs.Dir.Walker,
 
-    pub fn init(allocator: std.mem.Allocator, paths: std.ArrayList([]const u8)) Self {
+    pub fn init(paths: std.ArrayListUnmanaged([]const u8)) Self {
         return Self{
-            .allocator = allocator,
             .paths_to_search = paths,
             .current_path_index = 0,
             .current_dir = null,
@@ -107,11 +98,12 @@ pub const PythonFileIterator = struct {
     }
 
     const NextRes = struct {
-        size: usize,
-        base_path: *const []const u8,
+        relative: []const u8,
+        base_path: []const u8,
     };
 
-    pub fn next(self: *Self, relative_path_out_buf: []u8) !?NextRes {
+    /// NextRes.relative is owned by the caller, they're responsible for calling `allocator.free` on it
+    pub fn next(self: *Self, allocator: std.mem.Allocator) !?NextRes {
         for (self.paths_to_search.items[self.current_path_index..]) |base_path| {
             if (self.walker == null) {
                 const dir = std.fs.cwd().openDir(base_path, .{ .iterate = true }) catch |err| {
@@ -121,16 +113,13 @@ pub const PythonFileIterator = struct {
                     continue;
                 };
                 self.current_dir = dir;
-                self.walker = try dir.walk(self.allocator);
+                self.walker = try dir.walk(allocator);
             }
 
             while (try self.walker.?.next()) |entry| {
                 if (entry.kind == .file and std.mem.endsWith(u8, entry.path, ".py")) {
-                    if (entry.path.len >= relative_path_out_buf.len) {
-                        return error.OutOfMemory;
-                    }
-                    @memcpy(relative_path_out_buf[0..entry.path.len], entry.path);
-                    return .{ .size = entry.path.len, .base_path = &base_path };
+                    const ret_entry = try allocator.dupe(u8, entry.path);
+                    return .{ .relative = ret_entry, .base_path = base_path };
                 }
             }
 
@@ -142,16 +131,28 @@ pub const PythonFileIterator = struct {
     }
 };
 
-test "PythonFileIterator finds all .py files across multiple directories" {
-    try test_utils.is_regular();
+fn createTestPaths(allocator: std.mem.Allocator) !struct {
+    const Self = @This();
 
-    const allocator = testing.allocator;
+    tmp_dir: testing.TmpDir,
+    paths_to_search: std.ArrayListUnmanaged([]const u8),
+    fullpath: []const u8,
 
+    fn deinit(self: *Self, allocator_: std.mem.Allocator) void {
+        const items = self.paths_to_search.items.len;
+        for (0..items) |idx| {
+            allocator_.free(self.paths_to_search.items[idx]);
+        }
+        self.paths_to_search.deinit(allocator_);
+        allocator_.free(self.fullpath);
+        self.tmp_dir.cleanup();
+    }
+} {
     var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
+    errdefer tmp.cleanup();
 
     const fullpath = try tmp.parent_dir.realpathAlloc(allocator, &tmp.sub_path);
-    defer allocator.free(fullpath);
+    errdefer allocator.free(fullpath);
 
     try tmp.dir.makePath("dir1/sub");
     try tmp.dir.makePath("dir2");
@@ -162,21 +163,67 @@ test "PythonFileIterator finds all .py files across multiple directories" {
     try tmp.dir.writeFile(.{ .sub_path = "dir2/app.js", .data = "" });
     try tmp.dir.writeFile(.{ .sub_path = "top_level.py", .data = "" }); // This should not be found.
 
-    var paths_to_search = std.ArrayList([]const u8).init(allocator);
-    defer paths_to_search.deinit();
+    var paths_to_search = std.ArrayListUnmanaged([]const u8){};
+    errdefer paths_to_search.deinit(allocator);
 
-    try paths_to_search.append(try std.fs.path.join(allocator, &.{ fullpath, "dir1" }));
-    try paths_to_search.append(try std.fs.path.join(allocator, &.{ fullpath, "dir2" }));
+    try paths_to_search.append(allocator, try std.fs.path.join(allocator, &.{ fullpath, "dir1" }));
+    try paths_to_search.append(allocator, try std.fs.path.join(allocator, &.{ fullpath, "dir2" }));
     const alloc_items = paths_to_search.items.len;
-    defer {
+    errdefer {
         for (0..alloc_items) |idx| {
             allocator.free(paths_to_search.items[idx]);
         }
+        paths_to_search.deinit(allocator);
     }
     // Add a path that doesn't exist to test robustness.
-    try paths_to_search.append("non_existent_dir");
+    try paths_to_search.append(allocator, try allocator.dupe(u8, "non_existent_dir"));
 
-    var iterator = PythonFileIterator.init(allocator, paths_to_search);
+    return .{
+        .tmp_dir = tmp,
+        .paths_to_search = paths_to_search,
+        .fullpath = fullpath,
+    };
+}
+
+fn benchmarkPythonFileIterator(_: std.mem.Allocator, _: *std.time.Timer) !void {
+    var infa = try allocators.IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 1024 * 16, 1024 * 1024 * 50);
+    defer infa.deinit();
+    const infa_alloc = infa.allocator();
+
+    var paths = try getPythonPaths(infa_alloc, "./testfixtures/testproject/.venv/bin/python");
+    defer paths.deinit(infa_alloc);
+
+    var iterator = PythonFileIterator.init(paths.paths);
+    defer iterator.deinit();
+
+    while (try iterator.next(infa_alloc)) |res| {
+        infa_alloc.free(res.relative);
+    }
+}
+
+test "benchmark python file iterators" {
+    try test_utils.is_benchmark("benchmark python file iterators");
+
+    const zul = @import("zul");
+
+    var dir = std.fs.cwd().openDir("./testfixtures/testproject/.venv/lib/python3.12/site-packages", .{}) catch {
+        std.debug.print("error: python venv not set up\n", .{});
+        return error{PythonVenvNotSetUp}.PythonVenvNotSetUp;
+    };
+    dir.close();
+
+    (try zul.benchmark.run(benchmarkPythonFileIterator, test_utils.default_benchmark_options)).print("benchmark PythonFileIterator");
+}
+
+test "PythonFileIterator finds all .py files across multiple directories" {
+    try test_utils.is_regular();
+
+    const allocator = testing.allocator;
+
+    var test_paths = try createTestPaths(allocator);
+    defer test_paths.deinit(allocator);
+
+    var iterator = PythonFileIterator.init(test_paths.paths_to_search);
     defer iterator.deinit();
 
     var found_files = std.ArrayList([]const u8).init(allocator);
@@ -185,9 +232,9 @@ test "PythonFileIterator finds all .py files across multiple directories" {
         found_files.deinit();
     }
 
-    var nbuf: [4096:0]u8 = undefined;
-    while (try iterator.next(&nbuf)) |res| {
-        const val = try std.mem.concat(allocator, u8, &.{ res.base_path.*, std.fs.path.sep_str, nbuf[0..res.size] });
+    while (try iterator.next(allocator)) |res| {
+        defer allocator.free(res.relative);
+        const val = try std.mem.concat(allocator, u8, &.{ res.base_path, std.fs.path.sep_str, res.relative });
         std.log.debug("res: {s}", .{val});
         try found_files.append(val);
     }
@@ -201,11 +248,11 @@ test "PythonFileIterator finds all .py files across multiple directories" {
         try results_set.put(file, {});
     }
 
-    const expected1 = try std.fs.path.join(allocator, &.{ fullpath, "dir1/main.py" });
+    const expected1 = try std.fs.path.join(allocator, &.{ test_paths.fullpath, "dir1/main.py" });
     defer allocator.free(expected1);
-    const expected2 = try std.fs.path.join(allocator, &.{ fullpath, "dir1/sub/utils.py" });
+    const expected2 = try std.fs.path.join(allocator, &.{ test_paths.fullpath, "dir1/sub/utils.py" });
     defer allocator.free(expected2);
-    const expected3 = try std.fs.path.join(allocator, &.{ fullpath, "dir2/app.py" });
+    const expected3 = try std.fs.path.join(allocator, &.{ test_paths.fullpath, "dir2/app.py" });
     defer allocator.free(expected3);
 
     try testing.expect(results_set.contains(expected1));
