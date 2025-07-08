@@ -119,8 +119,8 @@ fn benchmarkIncreaseNeverFreeAllocator(_: Allocator, _: *std.time.Timer) !void {
     try runAllocatorBenchmark(infa.allocator());
 }
 
-test "benchmark allocators" {
-    try test_utils.is_benchmark("benchmark allocators");
+test "benchmark allocators, lots of small allocs" {
+    try test_utils.is_benchmark("benchmark allocators, lots of small allocs");
 
     const zul = @import("zul");
 
@@ -129,6 +129,52 @@ test "benchmark allocators" {
     (try zul.benchmark.run(benchmarkArenaDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark arena default allocator");
     (try zul.benchmark.run(benchmarkCAllocator, test_utils.default_benchmark_options)).print("benchmark C allocator");
     (try zul.benchmark.run(benchmarkArenaCAllocator, test_utils.default_benchmark_options)).print("benchmark arena C allocator");
+}
+
+fn runBigAllocatorBenchmark(allocator: Allocator) !void {
+    const item = try allocator.alloc(u8, 32 * kb_to_bytes);
+    defer allocator.free(item);
+
+    const item2 = try allocator.alloc(u8, 64 * kb_to_bytes);
+    defer allocator.free(item2);
+}
+
+fn bigBenchmarkDefaultAllocator(default_allocator: Allocator, _: *std.time.Timer) !void {
+    try runBigAllocatorBenchmark(default_allocator);
+}
+
+fn bigBenchmarkArenaDefaultAllocator(default_allocator: Allocator, _: *std.time.Timer) !void {
+    var arena = std.heap.ArenaAllocator.init(default_allocator);
+    defer arena.deinit();
+    try runBigAllocatorBenchmark(arena.allocator());
+}
+
+fn bigBenchmarkCAllocator(_: Allocator, _: *std.time.Timer) !void {
+    try runBigAllocatorBenchmark(std.heap.c_allocator);
+}
+
+fn bigBenchmarkArenaCAllocator(_: Allocator, _: *std.time.Timer) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    try runBigAllocatorBenchmark(arena.allocator());
+}
+
+fn bigBenchmarkIncreaseNeverFreeAllocator(_: Allocator, _: *std.time.Timer) !void {
+    var infa = try IncreaseNeverFreeAllocator.init(std.heap.smp_allocator, 8 * kb_to_bytes, 100 * mb_to_bytes);
+    defer infa.deinit();
+    try runBigAllocatorBenchmark(infa.allocator());
+}
+
+test "benchmark allocators, big allocs" {
+    try test_utils.is_benchmark("benchmark allocators, big allocs");
+
+    const zul = @import("zul");
+
+    (try zul.benchmark.run(bigBenchmarkIncreaseNeverFreeAllocator, test_utils.default_benchmark_options)).print("benchmark IncreaseNeverFreeAllocator");
+    (try zul.benchmark.run(bigBenchmarkDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark default allocator");
+    (try zul.benchmark.run(bigBenchmarkArenaDefaultAllocator, test_utils.default_benchmark_options)).print("benchmark arena default allocator");
+    (try zul.benchmark.run(bigBenchmarkCAllocator, test_utils.default_benchmark_options)).print("benchmark C allocator");
+    (try zul.benchmark.run(bigBenchmarkArenaCAllocator, test_utils.default_benchmark_options)).print("benchmark arena C allocator");
 }
 
 test "test allocators" {
