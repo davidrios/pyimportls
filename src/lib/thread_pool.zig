@@ -29,7 +29,7 @@ const zul = @import("zul");
 const allocators = @import("allocators.zig");
 const test_utils = @import("test_utils.zig");
 
-const ThreadPool = @This();
+pub const ThreadPool = @This();
 
 stack_size: u32,
 max_threads: u32,

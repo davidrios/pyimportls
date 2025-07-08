@@ -97,7 +97,7 @@ pub const PythonFileIterator = struct {
         }
     }
 
-    const NextRes = struct {
+    pub const NextRes = struct {
         relative: []const u8,
         base_path: []const u8,
     };
