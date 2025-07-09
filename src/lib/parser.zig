@@ -9,6 +9,13 @@ const test_utils = @import("test_utils.zig");
 
 extern fn tree_sitter_python() callconv(.C) *const ts.Language;
 
+const Error = error{
+    TreeNotFound,
+    NotInitialized,
+    NotPyFile,
+    ErrorOpeningDir,
+};
+
 const SymbolType = enum {
     class,
     function,
@@ -16,6 +23,28 @@ const SymbolType = enum {
 };
 
 const SymbolList = std.ArrayListUnmanaged(struct { stype: SymbolType, name: []const u8 });
+
+fn debugNode(node: *const ts.Node, base: []const u8, buf: []const u8) void {
+    std.log.debug("{s}: {}, {s}", .{ base, node, buf[node.startByte()..@min(node.endByte(), node.startByte() + 20)] });
+}
+
+const NodeKindIdMap = struct {
+    module: u16,
+    class_definition: u16,
+    function_definition: u16,
+    expression: u16,
+    assignment: u16,
+    identifier: u16,
+    decorated_definition: u16,
+    block: u16,
+    try_statement: u16,
+    except_clause: u16,
+    if_statement: u16,
+    else_clause: u16,
+    elif_clause: u16,
+};
+
+var node_kind_id_map: ?NodeKindIdMap = null;
 
 pub const Parsed = struct {
     buffer: []const u8,
@@ -32,72 +61,104 @@ pub const Parsed = struct {
     }
 
     pub fn getExportedSymbols(self: *Self, allocator: Allocator) !SymbolList {
+        const idmap = node_kind_id_map orelse return Error.NotInitialized;
+
         var list = SymbolList{};
-
-        const module_id = self.language.idForNodeKind("module", true);
-        const class_id = self.language.idForNodeKind("class_definition", true);
-        const func_id = self.language.idForNodeKind("function_definition", true);
-        const expr_id = self.language.idForNodeKind("expression_statement", true);
-        const assign_id = self.language.idForNodeKind("assignment", true);
-        const identifier_id = self.language.idForNodeKind("identifier", true);
-        const decorated_definition_id = self.language.idForNodeKind("decorated_definition", true);
-
         const root = self.tree.rootNode();
-        // std.log.debug("root: {} {d}", .{ root, root.childCount() });
-        if (root.kindId() == module_id) {
-            var cursor = root.walk();
-            defer cursor.destroy();
+        if (root.kindId() != idmap.module) {
+            return list;
+        }
+        var cursor = root.walk();
+        defer cursor.destroy();
 
-            if (!cursor.gotoFirstChild()) {
-                return list;
+        if (!cursor.gotoFirstChild()) {
+            std.log.debug("no first child", .{});
+            return list;
+        }
+
+        try self.getExportedSymbolsInner(allocator, &cursor, &list);
+
+        return list;
+    }
+
+    fn getExportedSymbolsInner(self: *Self, allocator: Allocator, cursor: *ts.TreeCursor, list: *SymbolList) !void {
+        const idmap = node_kind_id_map orelse return Error.NotInitialized;
+
+        std.log.debug("first node: {}", .{cursor.node()});
+        var is_first = true;
+
+        while (is_first or cursor.gotoNextSibling()) {
+            is_first = false;
+            var node = cursor.node();
+            var node_kind = node.kindId();
+
+            if (node_kind == idmap.block or
+                node_kind == idmap.if_statement or
+                node_kind == idmap.else_clause or
+                node_kind == idmap.elif_clause or
+                node_kind == idmap.try_statement or
+                node_kind == idmap.except_clause)
+            {
+                if (std.log.defaultLogEnabled(std.log.Level.debug)) {
+                    debugNode(&node, "entering", self.buffer);
+                }
+                std.debug.assert(cursor.gotoFirstChild());
+
+                try self.getExportedSymbolsInner(allocator, cursor, list);
+                if (cursor.gotoParent()) {
+                    if (std.log.defaultLogEnabled(std.log.Level.debug)) {
+                        debugNode(&cursor.node(), "exiting", self.buffer);
+                    }
+                }
+                continue;
             }
 
-            while (cursor.gotoNextSibling()) {
-                var node = cursor.node();
-                var node_kind = node.kindId();
+            if (node_kind == idmap.decorated_definition) {
+                node = node.child(1) orelse return;
+                node_kind = node.kindId();
+            }
 
-                if (node_kind == decorated_definition_id) {
-                    node = node.child(1) orelse return list;
-                    node_kind = node.kindId();
-                }
+            std.log.debug("sibling: {}", .{node});
 
-                std.log.debug("sibling: {}", .{node});
-
-                if (node_kind == class_id or node_kind == func_id) {
-                    if (node.namedChild(0)) |child| {
-                        if (child.kindId() != identifier_id) {
-                            continue;
-                        }
-                        try list.append(allocator, .{
-                            .stype = if (node_kind == class_id) .class else .function,
-                            .name = self.buffer[child.startByte()..child.endByte()],
-                        });
+            if (node_kind == idmap.class_definition or node_kind == idmap.function_definition) {
+                if (node.namedChild(0)) |child| {
+                    if (child.kindId() != idmap.identifier) {
+                        continue;
                     }
-                } else if (node_kind == expr_id) {
-                    if (node.child(0)) |child| {
-                        if (child.kindId() != assign_id) {
+                    const name = self.buffer[child.startByte()..child.endByte()];
+                    if (std.mem.startsWith(u8, name, "_")) {
+                        continue;
+                    }
+                    std.log.debug("found symbol: {s}", .{name});
+                    try list.append(allocator, .{
+                        .stype = if (node_kind == idmap.class_definition) .class else .function,
+                        .name = name,
+                    });
+                }
+            } else if (node_kind == idmap.expression) {
+                if (node.child(0)) |child| {
+                    if (child.kindId() != idmap.assignment) {
+                        continue;
+                    }
+
+                    if (child.namedChild(0)) |left| {
+                        if (left.kindId() != idmap.identifier) {
                             continue;
                         }
-
-                        if (child.namedChild(0)) |left| {
-                            if (left.kindId() != identifier_id) {
-                                continue;
-                            }
-                            try list.append(allocator, .{
-                                .stype = .variable,
-                                .name = self.buffer[left.startByte()..left.endByte()],
-                            });
+                        const name = self.buffer[left.startByte()..left.endByte()];
+                        if (std.mem.startsWith(u8, name, "_")) {
+                            continue;
                         }
+                        std.log.debug("found symbol: {s}", .{name});
+                        try list.append(allocator, .{
+                            .stype = .variable,
+                            .name = name,
+                        });
                     }
                 }
             }
         }
-        return list;
     }
-};
-
-const Error = error{
-    TreeNotFound,
 };
 
 pub fn parse(buffer: []const u8) !Parsed {
@@ -108,6 +169,22 @@ pub fn parse(buffer: []const u8) !Parsed {
     errdefer parser.destroy();
 
     try parser.setLanguage(language);
+
+    node_kind_id_map = NodeKindIdMap{
+        .module = language.idForNodeKind("module", true),
+        .class_definition = language.idForNodeKind("class_definition", true),
+        .function_definition = language.idForNodeKind("function_definition", true),
+        .expression = language.idForNodeKind("expression_statement", true),
+        .assignment = language.idForNodeKind("assignment", true),
+        .identifier = language.idForNodeKind("identifier", true),
+        .decorated_definition = language.idForNodeKind("decorated_definition", true),
+        .block = language.idForNodeKind("block", true),
+        .try_statement = language.idForNodeKind("try_statement", true),
+        .except_clause = language.idForNodeKind("except_clause", true),
+        .if_statement = language.idForNodeKind("if_statement", true),
+        .else_clause = language.idForNodeKind("else_clause", true),
+        .elif_clause = language.idForNodeKind("elif_clause", true),
+    };
 
     if (parser.parseString(buffer, null)) |tree| {
         return .{ .buffer = buffer, .language = language, .parser = parser, .tree = tree };
@@ -122,11 +199,11 @@ const PARENT_DIR_LEN = 3;
 /// The returned string is allocated and owned by the called
 pub fn getModulePath(allocator: Allocator, fpath: []const u8) ![]const u8 {
     if (!std.mem.endsWith(u8, fpath, ".py")) {
-        return error.NotPyFile;
+        return Error.NotPyFile;
     }
 
     // std.log.debug("trying {s}", .{fpath});
-    const dir_name = std.fs.path.dirname(fpath) orelse return error.ErrorOpeningDir;
+    const dir_name = std.fs.path.dirname(fpath) orelse return Error.ErrorOpeningDir;
     var dir = try std.fs.cwd().openDir(dir_name, .{});
     defer dir.close();
 
@@ -222,12 +299,23 @@ test "test getModulePath returns correct value" {
     }
 }
 
-test "test html2text/config.py" {
+fn expectAllSymbols(symbols: *const SymbolList, compare: []const []const u8) !void {
+    var results_set = std.StringHashMap(void).init(testing.allocator);
+    defer results_set.deinit();
+    for (symbols.items) |symbol| {
+        try results_set.put(symbol.name, {});
+    }
+    for (compare) |compare_item| {
+        try testing.expect(results_set.contains(compare_item));
+    }
+}
+
+test "test getExportedSymbols" {
     try test_utils.is_regular();
 
     const allocator = testing.allocator;
 
-    const file = try std.fs.cwd().openFile(test_targets[3], .{});
+    const file = try std.fs.cwd().openFile("testfixtures/test_symbols.py", .{});
     defer file.close();
 
     const buf = try file.readToEndAlloc(allocator, 99 * allocators.mb_to_bytes);
@@ -239,7 +327,33 @@ test "test html2text/config.py" {
     var symbols = try parsed.getExportedSymbols(allocator);
     defer symbols.deinit(allocator);
 
-    for (symbols.items) |item| {
-        std.log.debug("{}:{s}", .{ item.stype, item.name });
-    }
+    try expectAllSymbols(&symbols, &.{
+        "test",
+        "logger",
+        "HTTPHeaders",
+        "file_type",
+        "zip",
+        "accepts_kwargs",
+        "from_dict",
+        "MD5_AVAILABLE",
+        "MD5_AVAILABLE",
+        "disabled",
+        "HAS_CRT",
+        "HAS_CRT",
+        "XXXX",
+        "LS32_PAT",
+        "HAS_GZIP",
+        "HAS_GZIP",
+        "HAS_GZIP2",
+        "DDDDDD",
+        "CCCC",
+        "ZZZ",
+        "ZZZ",
+        "ZZZZ",
+        "VVV",
+        "XXX",
+        "SSS",
+        "AA",
+        "BBB",
+    });
 }
