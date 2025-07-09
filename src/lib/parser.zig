@@ -15,7 +15,7 @@ const SymbolType = enum {
     variable,
 };
 
-const SymbolList = std.ArrayListUnmanaged(struct { SymbolType, []const u8 });
+const SymbolList = std.ArrayListUnmanaged(struct { stype: SymbolType, name: []const u8 });
 
 pub const Parsed = struct {
     buffer: []const u8,
@@ -69,8 +69,8 @@ pub const Parsed = struct {
                             continue;
                         }
                         try list.append(allocator, .{
-                            if (node_kind == class_id) .class else .function,
-                            self.buffer[child.startByte()..child.endByte()],
+                            .stype = if (node_kind == class_id) .class else .function,
+                            .name = self.buffer[child.startByte()..child.endByte()],
                         });
                     }
                 } else if (node_kind == expr_id) {
@@ -83,7 +83,10 @@ pub const Parsed = struct {
                             if (left.kindId() != identifier_id) {
                                 continue;
                             }
-                            try list.append(allocator, .{ .variable, self.buffer[left.startByte()..left.endByte()] });
+                            try list.append(allocator, .{
+                                .stype = .variable,
+                                .name = self.buffer[left.startByte()..left.endByte()],
+                            });
                         }
                     }
                 }
@@ -237,6 +240,6 @@ test "test html2text/config.py" {
     defer symbols.deinit(allocator);
 
     for (symbols.items) |item| {
-        std.log.debug("{}:{s}", .{ item.@"0", item.@"1" });
+        std.log.debug("{}:{s}", .{ item.stype, item.name });
     }
 }
