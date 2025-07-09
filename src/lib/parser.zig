@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const Allocator = std.mem.Allocator;
 
 const ts = @import("tree-sitter");
 
@@ -30,7 +31,7 @@ pub const Parsed = struct {
         self.tree.destroy();
     }
 
-    pub fn getExportedSymbols(self: *Self, allocator: std.mem.Allocator) !SymbolList {
+    pub fn getExportedSymbols(self: *Self, allocator: Allocator) !SymbolList {
         var list = SymbolList{};
 
         const module_id = self.language.idForNodeKind("module", true);
@@ -112,6 +113,53 @@ pub fn parse(buffer: []const u8) !Parsed {
     }
 }
 
+const PARENT_DIR = (".." ++ std.fs.path.sep_str)[0..3];
+const PARENT_DIR_LEN = 3;
+
+/// The returned string is allocated and owned by the called
+pub fn getModulePath(allocator: Allocator, fpath: []const u8) ![]const u8 {
+    if (!std.mem.endsWith(u8, fpath, ".py")) {
+        return error.NotPyFile;
+    }
+
+    // std.log.debug("trying {s}", .{fpath});
+    const dir_name = std.fs.path.dirname(fpath) orelse return error.ErrorOpeningDir;
+    var dir = try std.fs.cwd().openDir(dir_name, .{});
+    defer dir.close();
+
+    var parts = std.ArrayListUnmanaged([]const u8){};
+    defer parts.deinit(allocator);
+
+    var level: usize = 0;
+    var pathSlices = std.mem.splitBackwardsScalar(u8, fpath, std.fs.path.sep);
+    var parents: [8192:0]u8 = .{0} ** 8192;
+
+    while (pathSlices.next()) |pathSlice| {
+        if (level == 0) {
+            if (!std.mem.eql(u8, pathSlice, "__init__.py")) {
+                try parts.append(allocator, pathSlice[0 .. pathSlice.len - 3]);
+            }
+        } else {
+            const parents_slice = parents[0 .. PARENT_DIR_LEN * (level - 1)];
+            const parents_init = if (parents_slice.len == 0)
+                try std.mem.concat(allocator, u8, &.{ ".", std.fs.path.sep_str, "__init__.py" })
+            else
+                try std.mem.concat(allocator, u8, &.{ parents_slice, "__init__.py" });
+            defer allocator.free(parents_init);
+            // std.log.debug("{s}", .{parents_init});
+
+            dir.access(parents_init, .{}) catch break;
+            try parts.append(allocator, pathSlice);
+            @memcpy(parents[PARENT_DIR_LEN * (level - 1) .. (PARENT_DIR_LEN * (level - 1)) + PARENT_DIR_LEN], PARENT_DIR);
+        }
+        level += 1;
+    }
+
+    std.mem.reverse([]const u8, parts.items);
+
+    return std.mem.join(allocator, ".", parts.items);
+}
+
 test "test ABI version" {
     try test_utils.is_regular();
 
@@ -129,7 +177,47 @@ const test_targets = .{
     "testfixtures/testproject/.venv/lib/python3.12/site-packages/virtualenv/create/via_global_ref/builtin/cpython/cpython3.py",
     "testfixtures/testproject/.venv/lib/python3.12/site-packages/django/conf/locale/cs/__init__.py",
     "testfixtures/testproject/.venv/lib/python3.12/site-packages/faker/providers/company/hr_HR/__init__.py",
+    "testfixtures/testproject/.venv/lib/python3.12/site-packages/split.py",
 };
+
+test "test getModulePath returns correct value" {
+    const allocator = testing.allocator;
+    {
+        const module_path = try getModulePath(allocator, test_targets[0]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("html2text.config", module_path);
+    }
+    {
+        const module_path = try getModulePath(allocator, test_targets[1]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("dns.rdtypes.tlsabase", module_path);
+    }
+    {
+        const module_path = try getModulePath(allocator, test_targets[2]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("pandas.tests.arithmetic.test_object", module_path);
+    }
+    {
+        const module_path = try getModulePath(allocator, test_targets[3]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("botocore.compat", module_path);
+    }
+    {
+        const module_path = try getModulePath(allocator, test_targets[5]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("django.conf.locale.cs", module_path);
+    }
+    {
+        const module_path = try getModulePath(allocator, test_targets[6]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("faker.providers.company.hr_HR", module_path);
+    }
+    {
+        const module_path = try getModulePath(allocator, test_targets[7]);
+        defer allocator.free(module_path);
+        try testing.expectEqualStrings("split", module_path);
+    }
+}
 
 test "test html2text/config.py" {
     try test_utils.is_regular();
